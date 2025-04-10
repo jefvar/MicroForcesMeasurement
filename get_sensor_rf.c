@@ -46,19 +46,23 @@ int main() {
 
     printf("Cliente conectado\n");
 
-    // Loop de adquisición y envío
+    // Configurar el modo de adquisición para RF
+    rp_AnalogInCalibrate(RP_CH_1);  // Calibración de la entrada RFA
+    rp_AnalogInCalibrate(RP_CH_2);  // Calibración de la entrada RFB
+
+    // Bucle de adquisición y envío
     while (1) {
-        float value;
-        uint32_t raw_value;  // Variable para almacenar el valor crudo
-        rp_AIpinGetValue(RP_AIN0, &value, &raw_value);
+        float valueRFA, valueRFB;
+        uint32_t raw_valueRFA, raw_valueRFB;
 
-        char buffer[32];
-        snprintf(buffer, sizeof(buffer), "%.4f\n", value);
+        // Leer señales de RF de RFA y RFB
+        rp_AnalogInGetVolt(RP_CH_1, &valueRFA);  // Leer la entrada RFA
+        rp_AnalogInGetVolt(RP_CH_2, &valueRFB);  // Leer la entrada RFB
 
-        // Mostrar en consola
-        printf("Valor leído: %.4f V\n", value);
+        // Formato para enviar las señales como texto
+        char buffer[64];
+        snprintf(buffer, sizeof(buffer), "RFA: %.4f V, RFB: %.4f V\n", valueRFA, valueRFB);
 
-        // Enviar por socket
         send(client_fd, buffer, strlen(buffer), 0);
 
         usleep(10000); // 10 ms -> 100 Hz
