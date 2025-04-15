@@ -5,16 +5,16 @@
 #include <arpa/inet.h>
 #include "rp.h"
 
-#define PORT 5000
+#define PORT 4200
 
 int main() {
-    // Iniciar API
+    // Init API
     if (rp_Init() != RP_OK) {
-        fprintf(stderr, "Error al iniciar API\n");
+        fprintf(stderr, "Error while initializing API\n");
         return -1;
     }
 
-    // Crear socket
+    // Create socket
     int server_fd, client_fd;
     struct sockaddr_in address;
     socklen_t addrlen = sizeof(address);
@@ -31,36 +31,52 @@ int main() {
 
     // Bind
     if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
-        perror("Error en bind");
+        perror("Error in bind");
         return -1;
     }
 
-    // Escuchar
+    // Listen
     listen(server_fd, 1);
-    printf("Esperando conexión en puerto %d...\n", PORT);
+    printf("Waiting connection to port %d...\n", PORT);
     client_fd = accept(server_fd, (struct sockaddr *)&address, &addrlen);
     if (client_fd < 0) {
-        perror("Error en accept");
+        perror("Error in accepting");
         return -1;
     }
 
-    printf("Cliente conectado\n");
+    printf("Client connected\n");
 
-    // Loop de adquisición y envío
+    bool started = false;
+
     while (1) {
+        char cmd;
         float value;
-        uint32_t raw_value;  // Variable para almacenar el valor crudo
-        rp_AIpinGetValue(RP_AIN0, &value, &raw_value);
+        uint32_t raw_value;
 
-        char buffer[32];
-        snprintf(buffer, sizeof(buffer), "%.4f\n", value);
+        if (recv(client_fd, &cmd, 1, MSG_DONTWAIT) > 0 ) 
+        {
+            if(cmd == 'A') {
+                started = true;
+            } else if (cmd == 'S') {
+                started = false;
+            }
+        }
+        
+        
+        if (started) {
+            rp_AIpinGetValue(RP_AIN0, &value, &raw_value);              // Red ADC in AIN0
 
-        // Mostrar en consola
-        printf("Valor leído: %.4f V\n", value);
+            char buffer[32];
+            snprintf(buffer, sizeof(buffer), "%.4f\n", value);
 
-        // Enviar por socket
-        send(client_fd, buffer, strlen(buffer), 0);
+            // Show in console
+            printf("Valor leído: %.4f V\n", value);
 
+            // Send to socket
+            send(client_fd, buffer, strlen(buffer), 0);
+
+        }
+        
         usleep(10000); // 10 ms -> 100 Hz
     }
 
