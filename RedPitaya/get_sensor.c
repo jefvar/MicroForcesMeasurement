@@ -73,10 +73,11 @@ int main() {
             printf("Valor leído: %.4f V\n", value);
 
             // Send to socket
-            send(client_fd, buffer, strlen(buffer), 0);
+            send(client_fd, 
+                , strlen(buffer), 0);
 
         }
-        
+
         usleep(10000); // 10 ms -> 100 Hz
     }
 
