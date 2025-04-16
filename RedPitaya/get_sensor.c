@@ -66,15 +66,14 @@ int main() {
         if (started) {
             rp_AIpinGetValue(RP_AIN0, &value, &raw_value);              // Red ADC in AIN0
 
-            char buffer[32];
+            char buffer[1500];
             snprintf(buffer, sizeof(buffer), "%.4f\n", value);
 
             // Show in console
-            printf("Valor leído: %.4f V\n", value);
+            //printf("Valor leído: %.4f V\n", value);
 
             // Send to socket
-            send(client_fd, 
-                , strlen(buffer), 0);
+            send(client_fd, buffer, strlen(buffer), 0);
 
         }
 
