@@ -6,63 +6,73 @@
 #include "rp.h"
 
 #define PORT 5000
-#define S_SENSOR 579.43             // mV/mN (sensor sensitivity)
+#define S_SENSOR 579.43             // mV/mN
+#define THRESHOLD 5.0              // Threshold value for force increment
 
-double OffSet = 2.5;
-
-// Moving Average Filter
-void moving_average_filter(float* input, float* output, int n_samples, int window_size) {
-    for (int i = 0; i <= n_samples - window_size; i++) {
-        float sum = 0;
-        for (int j = 0; j < window_size; j++) {
-            sum += input[i + j];
-        }
-        output[i] = sum / window_size;
-    }
-}
+double OffSet = 2.5;  // Initialize offset value, will be updated with calibration
 
 void config_ADC() {
     rp_AcqReset();
-    rp_AcqSetDecimation(RP_DEC_64);     // 125MS/s => 125/64 = 1.953 MS/s (samples per second)
-    rp_AcqSetTriggerLevel(RP_CH_1, 0.1);         // Trigger voltage level
-    rp_AcqSetTriggerDelay(0);           // No delay
-    rp_AcqSetGain(RP_CH_1, RP_LOW);    // Channel 1 ±20 V
+    rp_AcqSetDecimation(RP_DEC_64);  // 125MS/s => 125/64 = 1.953 MS/s millions of samples per sec
+    rp_AcqSetTriggerLevel(RP_CH_1, 0.1);  // Trigger voltage level
+    rp_AcqSetTriggerDelay(0);  // No delay
+    rp_AcqSetGain(RP_CH_1, RP_LOW);  // Channel 1 ±20 V
 }
 
-// Get offset using moving average filter
-float Get_Offset_with_filter(int n_samples, int sample_block_length) {
+double calculateForce(double voltage, double offset) {
+    return 1000*(voltage - offset) / S_SENSOR;
+}
+
+float movingAverageFilter(float *buffer, int n_samples, int block_size) {
+    float temp_buffer[n_samples - block_size + 1];
+    for (int i = 0; i <= n_samples - block_size; i++) {
+        float sum = 0;
+        for (int j = 0; j < block_size; j++) {
+            sum += buffer[i + j];
+        }
+        temp_buffer[i] = sum / block_size;
+    }
+
+    float avg_force = 0;
+    for (int i = 0; i < n_samples - block_size + 1; i++) {
+        avg_force += temp_buffer[i];
+    }
+
+    return avg_force / (n_samples - block_size + 1);
+}
+
+// Function to calculate the offset using moving average filter
+double calculateOffset(int n_samples, int sample_block_length) {
     float buffer[n_samples];
-    float filtered_buffer[n_samples - sample_block_length + 1];
+    float temp_buffer[n_samples - sample_block_length + 1];
     uint32_t size = n_samples;
 
     rp_AcqStart();
-
-    rp_AcqSetTriggerSrc(RP_TRIG_SRC_NOW);       // Immediate trigger
-    rp_acq_trig_state_t state = RP_TRIG_STATE_TRIGGERED;
+    rp_AcqSetTriggerSrc(RP_TRIG_SRC_NOW);  // Immediate trigger
+    rp_acq_trig_state_t state;
     do {
         rp_AcqGetTriggerState(&state);
     } while (state != RP_TRIG_STATE_TRIGGERED);
 
-    rp_AcqGetOldestDataV(RP_CH_1, &size, buffer);
-
-    // Apply moving average filter to the voltage data
-    moving_average_filter(buffer, filtered_buffer, n_samples, sample_block_length);
-
-    // Calculate the average of the filtered data to get the offset
-    float final_acc = 0;
-    for (int i = 0; i < n_samples - sample_block_length + 1; i++) {
-        final_acc += filtered_buffer[i];
+    rp_AcqGetOldestDataV(RP_CH_1, &size, buffer);  // Read data from channel 1
+    rp_AcqStop();
+    // Moving Average Filter
+    for (int i = 0; i <= n_samples - sample_block_length; i++) {
+        float sum = 0;
+        for (int j = 0; j < sample_block_length; j++) {
+            sum += buffer[i + j];
+        }
+        temp_buffer[i] = sum / sample_block_length;
     }
 
-    double offset_value = final_acc / (n_samples - sample_block_length + 1);
-    printf("Offset (sample block length: %d): %.5f V\n", sample_block_length, offset_value);
-    return offset_value;
-}
+    // Mean value for offset
+    double offset_value = 0;
+    for (int i = 0; i < n_samples - sample_block_length + 1; i++) {
+        offset_value += temp_buffer[i];
+    }
 
-// Calculate force based on voltage and offset
-double GetForce(double Voltage, double Offset) {
-    double Force = (Voltage - Offset) / S_SENSOR;
-    return Force;
+    offset_value /= (n_samples - sample_block_length + 1);
+    return 10*offset_value;
 }
 
 int main() {
@@ -95,7 +105,7 @@ int main() {
 
     // Listen
     listen(server_fd, 1);
-    printf("Waiting for connection on port %d...\n", PORT);
+    printf("Waiting connection to port %d...\n", PORT);
     client_fd = accept(server_fd, (struct sockaddr *)&address, &addrlen);
     if (client_fd < 0) {
         perror("Error in accepting");
@@ -106,15 +116,22 @@ int main() {
 
     bool started = false;
 
+    // Configure ADC and calculate initial offset
     config_ADC();
-    OffSet = Get_Offset_with_filter(1024, 16);  // Use 1024 samples with a block length of 16 for the moving average
+    OffSet = calculateOffset(2048, 16);  // Calculate offset using 1024 samples and block size 16
+    printf("Calculated Offset: %.5f V\n", OffSet);
+
+    //uint32_t size = 16384;
+    uint32_t size = 100;
+    float buffer[size];
+    rp_acq_trig_state_t state;
+    double avg_force;
+    int flag = 0;
 
     while (1) {
         char cmd;
-
-        // Receive command from the client
-        if (recv(client_fd, &cmd, 1, MSG_DONTWAIT) > 0 ) {
-            if(cmd == 'A') {
+        if (recv(client_fd, &cmd, 1, MSG_DONTWAIT) > 0) {
+            if (cmd == 'A') {
                 started = true;
             } else if (cmd == 'S') {
                 started = false;
@@ -122,39 +139,38 @@ int main() {
         }
 
         if (started) {
-            // RF Acquisition
-            rp_AcqSetTriggerSrc(RP_TRIG_SRC_NOW);       // Immediate trigger
-            rp_acq_trig_state_t state = RP_TRIG_STATE_TRIGGERED;
+            // Start acquisition
+            rp_AcqStart();
+            rp_AcqSetTriggerSrc(RP_TRIG_SRC_NOW);  // Immediate trigger
             do {
                 rp_AcqGetTriggerState(&state);
             } while (state != RP_TRIG_STATE_TRIGGERED);
-
-            // Read data
-            uint32_t size = 16384; // Maximum number of samples (depends on decimation)
-            float buffer[size];
-
-            rp_AcqGetOldestDataV(RP_CH_1, &size, buffer);  // Read RF IN1
-
-            // Apply moving average filter to the acquired data
-            float filtered_buffer[size - 16 + 1];  // Adjust size for the filter
-            moving_average_filter(buffer, filtered_buffer, size, 16);
+            rp_AcqGetOldestDataV(RP_CH_1, &size, buffer);  // Read data from channel 1
 
             // Calculate force for each sample
             float forces[size];
-            for (int i = 0; i < size - 16 + 1; i++) {
-                forces[i] = GetForce(filtered_buffer[i], OffSet);  // Get force from filtered voltage data
-
-                // Print force value (optional)
-                printf("Force %d: %.4f N\n", i, forces[i]);
-
-                // If you want to send forces as strings over the socket, convert them to text
-                char send_buffer[100];
-                snprintf(send_buffer, sizeof(send_buffer), "%.4f\n", forces[i]);
-                send(client_fd, send_buffer, strlen(send_buffer), 0);
+            for (int i = 0; i < size; i++) {
+                forces[i] = calculateForce(10*buffer[i], OffSet);  // Convert voltage to force
+                printf("Vin: %.5f V\t F: %.5f\n", 10*buffer[i], forces[i]);
             }
-        }
 
-        //usleep(10000); // 10 ms -> 100 Hz
+            // Apply moving average filter to get the average force
+            avg_force = movingAverageFilter(forces, size, 16);
+
+            // Check if force exceeds threshold
+            if (avg_force > THRESHOLD) {
+                flag = 1;
+            } else {
+                flag = 0;
+            }
+
+            // Create a TCP buffer with the force and flag
+            char tcp_buffer[1500];
+            snprintf(tcp_buffer, sizeof(tcp_buffer), "%.4f,%d\n", avg_force, flag);
+
+            // Send the buffer with force and flag over TCP
+            send(client_fd, tcp_buffer, strlen(tcp_buffer), 0);
+        }
     }
 
     // Cleanup
