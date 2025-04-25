@@ -34,7 +34,7 @@ void saveForceDataToCSV(float *buffer, int size, const char *filename, double Ts
 
     for (int i = 0; i < size; i++) {
         double time_us = i * Ts_us;
-        double voltage = 10 * buffer[i];
+        double voltage = 10*buffer[i];
         fprintf(fp, "%.3f,%.5f\n", time_us, voltage);
     }
 
@@ -61,7 +61,8 @@ double movingAverageFilter(float *buffer, int n_samples, int block_size){
 }
 
 // Function to calculate the offset using moving average filter
-double calculateOffset(int n_samples, int sample_block_length) {
+double calculateOffset(int n_samples) {
+    int sample_block_length = 4;
     float buffer[n_samples];
     uint32_t size = n_samples;
 
@@ -126,15 +127,32 @@ int main() {
 
     // Configure ADC and calculate initial offset
     config_ADC();
-    OffSet = calculateOffset(16384, 4);  // Calculate offset using 1024 samples and block size 16
+    OffSet = calculateOffset(16384);  // Calculate offset using 1024 samples and block size 16
     printf("Calculated Offset: %.5f V\n", OffSet);
 
-    uint32_t size = 16384;
+    uint32_t size = 1024;
     //uint32_t size = 100;
     float buffer[size];
     rp_acq_trig_state_t state;
     //double avg_force;
     //int flag = 0;
+
+    usleep(1000);
+
+    FILE *fp_clear = fopen("/tmp/data_voltage.csv", "w");
+    if (fp_clear == NULL) {
+        perror("No se pudo limpiar el archivo");
+        return -1;
+    }
+    fclose(fp_clear);
+
+    FILE *fp = fopen("/tmp/data_voltage.csv", "a");  // abre una vez antes del bucle
+    if (fp == NULL) {
+        perror("No se pudo abrir el archivo para escritura");
+        return -1;
+    }
+
+    double total_time = 0.0;
 
     while (1) {
         
@@ -151,39 +169,34 @@ int main() {
             // Start acquisition
             rp_AcqStart();
             rp_AcqSetTriggerSrc(RP_TRIG_SRC_NOW);  // Immediate trigger
+            //rp_AcqSetTriggerSrc(RP_TRIG_SRC_CHA_PE);  // Trigger por nivel de voltaje: Ver config ADC
             do {
                 rp_AcqGetTriggerState(&state);
             } while (state != RP_TRIG_STATE_TRIGGERED);
             rp_AcqGetOldestDataV(RP_CH_1, &size, buffer);  // Read data from channel 1
 
-            // Calculate force for each sample
-            //float forces[size];
-            /*for (int i = 0; i < size; i++) {
-                //forces[i] = calculateForce(10*buffer[i], OffSet);  // Convert voltage to force
-                printf("Vin: %.5f V\n", 10*buffer[i]);
-            }*/
-
-            // Apply moving average filter to get the average force
-            //avg_force = movingAverageFilter(forces, size, 16);
-
-            // Check if force exceeds threshold
-            /*if (avg_force > THRESHOLD) {
-                flag = 1;
-            } else {
-                flag = 0;
-            }*/
-
-            // Create a TCP buffer with the force and flag
-            //char tcp_buffer[1500];
-            //snprintf(tcp_buffer, sizeof(tcp_buffer), "%.4f,%d\n", avg_force, flag);
-
-            // Send the buffer with force and flag over TCP
-            //send(client_fd, tcp_buffer, strlen(tcp_buffer), 0);
-            printf("Calculated Offset: %.5f V\n", OffSet);
-            usleep(100000);
+            // Voltage values
+            double Ts = 256.0 / 125;                // (256.0 / 125e6)*1e6 This value is microseconds
+            for (int j = 0; j < 1000; j++) {
+                for (int i = 0; i < size; i++) {
+                    total_time += Ts;       // tiempo en u_segundos
+                    double voltage = 10*buffer[i];          // convertir a voltaje real
+                    //printf("Time: %.4f, Voltage: %.6f\n", total_time, voltage);
+                    fprintf(fp, "%.4f,%.6f\n", total_time, voltage);
+                }
+                fflush(fp);
+                if (j == 999) {
+                    fclose(fp);
+                    started = false;
+                }
+            }
+            
+            
+            //usleep(100000);
         }
             
     }
+    
 
     // Cleanup
     close(client_fd);
